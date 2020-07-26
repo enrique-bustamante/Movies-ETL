@@ -15,15 +15,16 @@ file_dir = '/Users/enriquebustamante/DataAustin2020/Movies-ETL/'
 
 # %%
 # Create a function that will clean and combine the dataframes
-def cleanDataAndMerge(wiki_movies,kaggle, ratings):
+def extractTransformLoad(wiki_movies, kaggle, ratings):
     # read in the Wikipedia data
     with open(f'{file_dir}{wiki_movies}', mode='r') as file:
         wiki_movies_raw = json.load(file)
-    wiki_movies_df = pd.DataFrame(wiki_movies_raw)
-
+    wiki_movies = [movie for movie in wiki_movies_raw
+               if ('Director' in movie or 'Directed by' in movie)
+                   and 'imdb_link' in movie] # potential issue
     # Read in the Kaggle and Rating data
     kaggle_metadata = pd.read_csv(f'{file_dir}{kaggle}')
-    ratings = pd.read_csv(f'{file_dir}ratings.csv')
+    ratings = pd.read_csv(f'{file_dir}{ratings}')
     
     # Create a function to clean the movie data
     def clean_movie(movie):
@@ -64,7 +65,6 @@ def cleanDataAndMerge(wiki_movies,kaggle, ratings):
         change_column_name('Story by', 'Writer(s)')
         change_column_name('Theme music composer', 'Composer(s)')
         change_column_name('Written by', 'Writer(s)')
-
         return movie
     
     # Loop through the data to get the clean movie data
@@ -81,10 +81,7 @@ def cleanDataAndMerge(wiki_movies,kaggle, ratings):
     wiki_columns_to_keep = [column for column in wiki_movies_df.columns if wiki_movies_df[column].isnull().sum() < len(wiki_movies_df) * 0.9]
     wiki_movies_df = wiki_movies_df[wiki_columns_to_keep]  
 
-    # Drop rows with null box office values and unpack lists into strings
-    box_office = wiki_movies_df['Box office'].dropna()
-    box_office = box_office.apply(lambda x: ' '.join(x) if type(x) == list else x)
-
+    
     # Create regex strings to find numbers that fit the format
     form_one = r'\$\s*\d+\.?\d*\s*[mb]illi?on'
     form_two = r'\$\s*\d{1,3}(?:[,\.]\d{1,3})+(?!\s[mb]illion)'
@@ -124,36 +121,57 @@ def cleanDataAndMerge(wiki_movies,kaggle, ratings):
         # otherwise, return NaN
         else:
             return np.nan
-    # this will parse the Box office column and change values to floats
-    wiki_movies_df['box_office'] = box_office.str.extract(f'({form_one}|{form_two})', flags=re.IGNORECASE)[0].apply(parse_dollars)
-    # We no longer need the Box Office column so we'll drop it
-    wiki_movies_df.drop('Box office', axis=1, inplace=True)
+
+    try:
+        # Drop rows with null box office values and unpack lists into strings
+        box_office = wiki_movies_df['Box office'].dropna()
+        box_office = box_office.apply(lambda x: ' '.join(x) if type(x) == list else x)
+
+        # this will parse the Box office column and change values to floats
+        wiki_movies_df['box_office'] = box_office.str.extract(f'({form_one}|{form_two})', flags=re.IGNORECASE)[0].apply(parse_dollars)
+        # We no longer need the Box Office column so we'll drop it
+        wiki_movies_df.drop('Box office', axis=1, inplace=True)
+
+    except KeyError:
+        pass
 
     # Clean budget column
-    budget = wiki_movies_df['Budget'].dropna()
-    budget = budget.map(lambda x: ' '.join(x) if type(x) == list else x)
-    budget = budget.str.replace(r'\$.*[-—–](?![a-z])', '$', regex=True)
-    budget = budget.str.replace(r'\[\d+\]\s*', '')
-    wiki_movies_df['budget'] = budget.str.extract(f'({form_one}|{form_two})', flags=re.IGNORECASE)[0].apply(parse_dollars)
-    wiki_movies_df.drop('Budget', axis=1, inplace=True)
+    try:
+        budget = wiki_movies_df['Budget'].dropna()
+        budget = budget.map(lambda x: ' '.join(x) if type(x) == list else x)
+        budget = budget.str.replace(r'\$.*[-—–](?![a-z])', '$', regex=True)
+        budget = budget.str.replace(r'\[\d+\]\s*', '')
+        wiki_movies_df['budget'] = budget.str.extract(f'({form_one}|{form_two})', flags=re.IGNORECASE)[0].apply(parse_dollars)
+        wiki_movies_df.drop('Budget', axis=1, inplace=True)
+
+    except KeyError:
+        pass
 
     # Clean release date data
-    release_date = wiki_movies_df['Release date'].dropna().apply(lambda x: ' '.join(x) if type(x) == list else x)
-    date_form_one = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s[123]\d,\s\d{4}'
-    date_form_two = r'\d{4}.[01]\d.[123]\d'
-    date_form_three = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s\d{4}'
-    date_form_four = r'\d{4}'
-    wiki_movies_df['release_date'] = pd.to_datetime(release_date.str.extract(f'({date_form_one}|{date_form_two}|{date_form_three}|{date_form_four})')[0], infer_datetime_format=True)
+    try:
+        release_date = wiki_movies_df['Release date'].dropna().apply(lambda x: ' '.join(x) if type(x) == list else x)
+        date_form_one = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s[123]\d,\s\d{4}'
+        date_form_two = r'\d{4}.[01]\d.[123]\d'
+        date_form_three = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s\d{4}'
+        date_form_four = r'\d{4}'
+        wiki_movies_df['release_date'] = pd.to_datetime(release_date.str.extract(f'({date_form_one}|{date_form_two}|{date_form_three}|{date_form_four})')[0], infer_datetime_format=True)
+
+    except KeyError:
+        pass
 
     # Clean running time data
-    running_time = wiki_movies_df['Running time'].dropna().apply(lambda x: ' '.join(x) if type(x) == list else x)
-    running_time_extract = running_time.str.extract(r'(\d+)\s*ho?u?r?s?\s*(\d*)|(\d+)\s*m')
-    running_time_extract = running_time_extract.apply(lambda col: pd.to_numeric(col, errors='coerce')).fillna(0)
-    wiki_movies_df['running_time'] = running_time_extract.apply(lambda row: row[0]*60 + row[1] if row[2] == 0 else row[2], axis=1)
-    wiki_movies_df.drop('Running time', axis=1, inplace=True)
+    try:
+        running_time = wiki_movies_df['Running time'].dropna().apply(lambda x: ' '.join(x) if type(x) == list else x)
+        running_time_extract = running_time.str.extract(r'(\d+)\s*ho?u?r?s?\s*(\d*)|(\d+)\s*m')
+        running_time_extract = running_time_extract.apply(lambda col: pd.to_numeric(col, errors='coerce')).fillna(0)
+        wiki_movies_df['running_time'] = running_time_extract.apply(lambda row: row[0]*60 + row[1] if row[2] == 0 else row[2], axis=1)
+        wiki_movies_df.drop('Running time', axis=1, inplace=True)
+
+    except KeyError:
+        pass
 
     # Clean Kaggle metadata
-    kaggle_metadata = kaggle[kaggle['adult'] == 'False'].drop('adult',axis='columns')
+    kaggle_metadata = kaggle_metadata[kaggle_metadata['adult'] == 'False'].drop('adult',axis='columns')
     kaggle_metadata['video'] = kaggle_metadata['video'] == 'True'
     kaggle_metadata['budget'] = kaggle_metadata['budget'].astype(int)
     kaggle_metadata['id'] = pd.to_numeric(kaggle_metadata['id'], errors='raise')
@@ -172,33 +190,49 @@ def cleanDataAndMerge(wiki_movies,kaggle, ratings):
     # Drop unnecessary columns
     movies_df.drop(columns=['title_wiki','release_date_wiki','Language','Production company(s)'], inplace=True)
 
-    # Define 
+    # Define fill_missing_kaggle_data function
     def fill_missing_kaggle_data(df, kaggle_column, wiki_column):
         df[kaggle_column] = df.apply(
             lambda row: row[wiki_column] if row[kaggle_column] == 0 else row[kaggle_column]
             , axis=1)
         df.drop(columns=wiki_column, inplace=True)
 
-    fill_missing_kaggle_data(movies_df, 'runtime', 'running_time')
-    fill_missing_kaggle_data(movies_df, 'budget_kaggle', 'budget_wiki')
-    fill_missing_kaggle_data(movies_df, 'revenue', 'box_office')
-    movies_df
+    try:
+        fill_missing_kaggle_data(movies_df, 'runtime', 'running_time')
+    except KeyError:
+        pass
+
+    try:
+        fill_missing_kaggle_data(movies_df, 'budget_kaggle', 'budget_wiki')
+    except KeyError:
+        pass
+    
+    try:
+        fill_missing_kaggle_data(movies_df, 'revenue', 'box_office')
+    except KeyError:
+        pass
 
     # Pass through for loop
-    Try:
-        for col in movies_df.columns:
-            lists_to_tuples = lambda x: tuple(x) if type(x) == list else x
-            value_counts = movies_df[col].apply(lists_to_tuples).value_counts(dropna=False)
-            num_values = len(value_counts)
-            if num_values == 1:
-                movies_df.drop(columns=col, inplace=True)
-    Except ValueError:
+    for col in movies_df.columns:
+        lists_to_tuples = lambda x: tuple(x) if type(x) == list else x
+        value_counts = movies_df[col].apply(lists_to_tuples).value_counts(dropna=False)
+        num_values = len(value_counts)
+        if num_values == 1:
+            movies_df.drop(columns=col, inplace=True)
 
-    movies_df = movies_df.loc[:, ['imdb_id','id','title_kaggle','original_title','tagline','belongs_to_collection','url','imdb_link',
-                       'runtime','budget_kaggle','revenue','release_date_kaggle','popularity','vote_average','vote_count',
-                       'genres','original_language','overview','spoken_languages','Country',
-                       'production_companies','production_countries','Distributor',
-                       'Producer(s)','Director','Starring','Cinematography','Editor(s)','Writer(s)','Composer(s)','Based on']]
+    try:
+        movies_df = movies_df.loc[:, ['imdb_id','id','title_kaggle','original_title','tagline','belongs_to_collection','url','imdb_link',
+                           'runtime','budget_kaggle','revenue','release_date_kaggle','popularity','vote_average','vote_count',
+                           'genres','original_language','overview','spoken_languages','Country',
+                           'production_companies','production_countries','Distributor',
+                           'Producer(s)','Director','Starring','Cinematography','Editor(s)','Writer(s)','Composer(s)','Based on']]
+    except KeyError:
+        columns = [col for col in movies_df.columns if col in ['imdb_id','id','title_kaggle','original_title','tagline','belongs_to_collection','url','imdb_link',
+                           'runtime','budget_kaggle','revenue','release_date_kaggle','popularity','vote_average','vote_count',
+                           'genres','original_language','overview','spoken_languages','Country',
+                           'production_companies','production_countries','Distributor',
+                           'Producer(s)','Director','Starring','Cinematography','Editor(s)','Writer(s)','Composer(s)','Based on']]
+        movies_df = movies_df.loc[:,columns]
 
     movies_df.rename({'id':'kaggle_id',
                   'title_kaggle':'title',
@@ -232,9 +266,32 @@ def cleanDataAndMerge(wiki_movies,kaggle, ratings):
     # Load movie data to Postgresql database
     db_string = f"postgres://postgres:{db_password}@127.0.0.1:5432/movie_data"
     movie_engine = create_engine(db_string)
-    movies_df.to_sql(name='movies', con=movie_engine)
+    connection = movie_engine.connect()
+    
+    movies_df.to_sql(name='movies', con=movie_engine, if_exists='replace')
+    
+    movies_with_ratings_df(name='movies_with_ratings', con=movie_engine, if_exists='replace')
+
+    # create a variable for the number of rows imported
+    rows_imported = 0
+    start_time = time.time()
+    for data in pd.read_csv(f'{file_dir}ratings.csv', chunksize=1000000):
+    #
+        # print out the range of rows that are being #imported
+        print(f'importing rows {rows_imported} to {rows_imported + len(data)}...', end='')
+
+        data.to_sql(name='ratings', con=movie_engine, if_exists='replace')
+
+        # increment the number of rows imported by #the size f 'data'
+        rows_imported += len(data)
+
+        # add elapsed time to final print out
+        print(f'Done. {time.time() - start_time}total seconds elapsed')        
 
 # %%
 # Pass the dataframes into the function
-cleanDataAndMerge(wiki_movies_df, kaggle_metadata, ratings)
+wiki_movies = 'wikipedia.movies.json'
+kaggle_metadata = 'movies_metadata.csv'
+ratings = 'ratings.csv'
+extractTransformLoad(wiki_movies, kaggle_metadata, ratings)
 # %%
